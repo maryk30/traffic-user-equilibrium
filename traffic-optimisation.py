@@ -75,12 +75,12 @@ def mip_example():
 
     m = Model()
 
-    x = [m.add_var(var_type=INTEGER, lb=0, ub=10) for _ in range(2)]
+    x = [m.add_var(var_type=INTEGER, lb=0, ub=100) for _ in range(3)]
 
-    m.objective = xsum([3 * x[0], 2 * x[1]])
-    m.objective.sense = MAXIMIZE
+    m.objective = xsum([3 * x[i] for i in range(3)])
+    m.sense = MAXIMIZE
 
-    m += x[0] + x[1] <= 10
+    m += xsum(x) <= 100
 
     m.optimize()
 
@@ -94,13 +94,19 @@ def mip_example():
 def deap_ga():
     from deap import base, creator, tools, algorithms
     import random
+    import numpy as np
 
     demand = 100
+    n_routes = 3
 
     def fitness(ind):
-        x = ind[0]
-        y = demand - x
-        cost = x**2 + y**2
+        x = np.array(ind)
+        x = np.clip(x, 0, demand)
+
+        # force feasibility
+        x = x / np.sum(x) * demand
+
+        cost = np.sum(x**2)
         return (cost,)
 
     creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
@@ -108,20 +114,45 @@ def deap_ga():
 
     toolbox = base.Toolbox()
     toolbox.register("attr_float", random.uniform, 0, demand)
-    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=1)
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=n_routes)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     toolbox.register("evaluate", fitness)
     toolbox.register("mate", tools.cxBlend, alpha=0.5)
-    toolbox.register("mutate", tools.mutGaussian, mu=50, sigma=10, indpb=0.2)
+    toolbox.register("mutate", tools.mutGaussian, mu=50, sigma=20, indpb=0.3)
     toolbox.register("select", tools.selTournament, tournsize=3)
 
-    pop = toolbox.population(n=30)
-    algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.2, ngen=40, verbose=False)
+    pop = toolbox.population(n=40)
+    algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.3, ngen=50, verbose=False)
 
     best = tools.selBest(pop, 1)[0]
-    return best
+    x = np.array(best)
 
+    # normalize to demand
+    x = x / np.sum(x) * demand
+    return x
+
+def print_results(title, x, t0, c):
+    x = np.array(x)
+    n = len(x)
+
+    # truncate or extend safely
+    t0 = np.array(t0[:n])
+    c = np.array(c[:n])
+
+    times = t0 * (1 + 0.15 * (x / c) ** 4)
+    tstt = np.sum(x * times)
+
+    print("\n" + "=" * 40)
+    print(title)
+    print("=" * 40)
+
+    for i in range(n):
+        print(f"Route {i+1}:")
+        print(f"  Flow = {x[i]:.4f}")
+        print(f"  Travel time = {times[i]:.4f}")
+
+    print(f"\nTotal System Travel Time (TSTT): {tstt:.4f}")
 
 # =========================
 # Run Example
@@ -132,7 +163,12 @@ if __name__ == "__main__":
     c = np.array([100, 120, 150])
     demand = 100
 
-    print("SciPy:", scipy_user_equilibrium(t0, c, demand))
-    print("CVXPY:", cvxpy_user_equilibrium())
-    print("MIP:", mip_example())
-    print("DEAP:", deap_ga())
+    scipy_sol = scipy_user_equilibrium(t0, c, demand)
+    cvxpy_sol = cvxpy_user_equilibrium()
+    mip_sol = mip_example()
+    deap_sol = deap_ga()
+
+    print_results("SciPy (User Equilibrium)", scipy_sol, t0, c)
+    print_results("CVXPY (Convex Optimization)", cvxpy_sol, t0, c)
+    print_results("MIP (Discrete Approximation)", mip_sol, t0, c)
+    print_results("DEAP (Genetic Algorithm)", [deap_sol[0], demand - deap_sol[0]], t0, c)
